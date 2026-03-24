@@ -1,6 +1,9 @@
 import Cloudflare from "cloudflare";
 
 const DISPATCH_NAMESPACE = "nestweb-production";
+const ROOT_DOMAIN = "sites.nestweb.ai";
+const LEGACY_ADMIN_HOST = "nestweb-dispatch-admin.nestweb.workers.dev";
+const WORKER_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,56}[a-z0-9])?$/;
 
 // Deploy function (copied from deploy-wfp.ts)
 async function deploySnippetToNamespace(
@@ -288,29 +291,87 @@ const HTML_UI = ({ isReadOnly }: { isReadOnly: boolean }) => `<!DOCTYPE html>
 </body>
 </html>`;
 
+type DispatchTarget = {
+	fetch(input: Request | string | URL, init?: RequestInit): Promise<Response>;
+};
+
+type DispatchNamespaceBinding = {
+	get(name: string): DispatchTarget;
+};
+
+type Env = {
+	CLOUDFLARE_API_TOKEN: string;
+	CLOUDFLARE_ACCOUNT_ID: string;
+	DISPATCHER: DispatchNamespaceBinding;
+	READONLY: string | boolean;
+};
+
+function isReadOnlyMode(value: string | boolean): boolean {
+	return value === true || value === "true";
+}
+
+function isValidWorkerName(name: string): boolean {
+	return WORKER_NAME_PATTERN.test(name);
+}
+
+function isLegacyAdminHost(hostname: string): boolean {
+	return hostname === LEGACY_ADMIN_HOST;
+}
+
+function extractWorkerNameFromSubdomainHost(hostname: string): string | null {
+	if (hostname === ROOT_DOMAIN) {
+		return null;
+	}
+
+	if (!hostname.endsWith(`.${ROOT_DOMAIN}`)) {
+		return null;
+	}
+
+	return hostname.slice(0, -(`.${ROOT_DOMAIN}`.length));
+}
+
+function rewriteLegacyPath(url: URL): string | null {
+	const parts = url.pathname.replace(/^\/+/, "").split("/").filter(Boolean);
+	const workerName = parts[0];
+
+	if (!workerName) {
+		return null;
+	}
+
+	url.pathname = parts.length > 1 ? `/${parts.slice(1).join("/")}` : "/";
+	return workerName;
+}
+
+function logDispatchEvent(event: string, details: Record<string, unknown>) {
+	console.log(
+		JSON.stringify({
+			event,
+			...details,
+		}),
+	);
+}
+
 export default {
 	async fetch(
 		request: Request,
-		env: {
-			CLOUDFLARE_API_TOKEN: string;
-			CLOUDFLARE_ACCOUNT_ID: string;
-			DISPATCHER: any;
-			READONLY: string | boolean;
-		},
+		env: Env,
 	) {
 		const url = new URL(request.url);
+		const hostname = url.hostname.toLowerCase();
 		const pathSegments = url.pathname.split("/").filter(Boolean);
-		const isReadOnly = env.READONLY === "true" || env.READONLY === true;
+		const isReadOnly = isReadOnlyMode(env.READONLY);
 
-		// Handle UI route
-		if (pathSegments.length === 0) {
+		if (isLegacyAdminHost(hostname) && pathSegments.length === 0) {
 			return new Response(HTML_UI({ isReadOnly }), {
 				headers: { "Content-Type": "text/html" },
 			});
 		}
 
-		// Handle deploy endpoint
-		if (pathSegments[0] === "deploy" && request.method === "POST") {
+		if (
+			isLegacyAdminHost(hostname) &&
+			pathSegments[0] === "deploy" &&
+			request.method === "POST"
+		) {
 			if (isReadOnly) {
 				return new Response(
 					JSON.stringify({ error: "Read-only mode enabled" }),
@@ -321,7 +382,12 @@ export default {
 				);
 			}
 			try {
-				const { scriptName, code } = await request.json();
+				const payload = (await request.json()) as {
+					scriptName?: string;
+					code?: string;
+				};
+				const scriptName = payload.scriptName?.trim();
+				const code = payload.code;
 
 				if (!scriptName || !code) {
 					return new Response(
@@ -346,33 +412,91 @@ export default {
 					headers: { "Content-Type": "application/json" },
 				});
 			} catch (error) {
-				return new Response(JSON.stringify({ error: error.message }), {
+				const message =
+					error instanceof Error ? error.message : "Unknown deployment error";
+				return new Response(JSON.stringify({ error: message }), {
 					status: 500,
 					headers: { "Content-Type": "application/json" },
 				});
 			}
 		}
 
-		// Handle worker dispatch (existing functionality)
-		const workerName = pathSegments[0];
+		if (hostname === ROOT_DOMAIN) {
+			if (url.pathname === "/" || url.pathname === "") {
+				return new Response("NestWeb Sites", { status: 200 });
+			}
+
+			if (url.pathname === "/healthz") {
+				return new Response(
+					JSON.stringify({
+						ok: true,
+						service: "nestweb-dispatch-admin",
+						host: hostname,
+					}),
+					{
+						headers: { "Content-Type": "application/json" },
+					},
+				);
+			}
+
+			return new Response("Site not found", { status: 404 });
+		}
+
+		let workerName = extractWorkerNameFromSubdomainHost(hostname);
+
+		if (!workerName && isLegacyAdminHost(hostname)) {
+			workerName = rewriteLegacyPath(url);
+		}
+
+		if (!workerName) {
+			return new Response("Site not found", { status: 404 });
+		}
+
+		if (!isValidWorkerName(workerName)) {
+			logDispatchEvent("dispatch.invalid_worker_name", {
+				host: hostname,
+				workerName,
+				path: url.pathname,
+				method: request.method,
+			});
+			return new Response("Invalid site", { status: 400 });
+		}
 
 		try {
-			const upstreamUrl = new URL(request.url);
-			const rewrittenPath =
-				pathSegments.length > 1 ? `/${pathSegments.slice(1).join("/")}` : "/";
-			upstreamUrl.pathname = rewrittenPath;
-			upstreamUrl.search = url.search;
-
 			const worker = env.DISPATCHER.get(workerName);
-			const upstreamRequest = new Request(upstreamUrl.toString(), request);
-			return await worker.fetch(upstreamRequest);
+			const upstreamRequest = new Request(url.toString(), request);
+			const response = await worker.fetch(upstreamRequest);
+
+			logDispatchEvent("dispatch.success", {
+				host: hostname,
+				workerName,
+				path: url.pathname,
+				method: request.method,
+				status: response.status,
+			});
+
+			return response;
 		} catch (e) {
-			if (e.message.startsWith("Worker not found")) {
-				return new Response(`Worker '${workerName}' not found`, {
-					status: 404,
+			const message = e instanceof Error ? e.message : "Unknown dispatch error";
+
+			if (message.startsWith("Worker not found")) {
+				logDispatchEvent("dispatch.worker_not_found", {
+					host: hostname,
+					workerName,
+					path: url.pathname,
+					method: request.method,
 				});
+				return new Response("Site not found", { status: 404 });
 			}
-			return new Response("Internal error", { status: 500 });
+
+			logDispatchEvent("dispatch.error", {
+				host: hostname,
+				workerName,
+				path: url.pathname,
+				method: request.method,
+				error: message,
+			});
+			return new Response("Runtime unavailable", { status: 502 });
 		}
 	},
 };
