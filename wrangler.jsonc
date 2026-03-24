@@ -7,7 +7,7 @@
 	"dispatch_namespaces": [
 		{
 			"binding": "DISPATCHER",
-			"namespace": "my-dispatch-namespace",
+			"namespace": "nestweb-production",
 			"remote": true
 		}
 	],

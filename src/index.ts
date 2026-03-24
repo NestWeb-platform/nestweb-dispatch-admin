@@ -1,5 +1,7 @@
 import Cloudflare from "cloudflare";
 
+const DISPATCH_NAMESPACE = "nestweb-production";
+
 // Deploy function (copied from deploy-wfp.ts)
 async function deploySnippetToNamespace(
 	opts: {
@@ -333,7 +335,7 @@ export default {
 
 				const result = await deploySnippetToNamespace(
 					{
-						namespaceName: "my-dispatch-namespace",
+						namespaceName: DISPATCH_NAMESPACE,
 						scriptName,
 						code,
 					},

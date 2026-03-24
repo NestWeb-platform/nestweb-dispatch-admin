@@ -1,6 +1,8 @@
 import Cloudflare from "cloudflare";
 import { toFile } from "cloudflare/index";
 
+const DISPATCH_NAMESPACE = "nestweb-production";
+
 const apiToken = process.env.CLOUDFLARE_API_TOKEN ?? "";
 const accountID = process.env.CLOUDFLARE_ACCOUNT_ID ?? "";
 
@@ -73,7 +75,7 @@ if (require.main === module) {
   `;
 
 	deploySnippetToNamespace({
-		namespaceName: "my-dispatch-namespace",
+		namespaceName: DISPATCH_NAMESPACE,
 		scriptName: "my-hello-world-script",
 		code,
 		bindings: [{ type: "plain_text", name: "MESSAGE", text: "Hello World!" }],
