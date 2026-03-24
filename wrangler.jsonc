@@ -11,6 +11,16 @@
 			"remote": true
 		}
 	],
+	"routes": [
+		{
+			"pattern": "sites.nestweb.ai/*",
+			"zone_name": "nestweb.ai"
+		},
+		{
+			"pattern": "*.sites.nestweb.ai/*",
+			"zone_name": "nestweb.ai"
+		}
+	],
 	"observability": {
 		"enabled": true
 	},
