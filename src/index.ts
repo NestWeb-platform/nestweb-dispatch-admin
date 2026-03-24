@@ -357,8 +357,15 @@ export default {
 		const workerName = pathSegments[0];
 
 		try {
+			const upstreamUrl = new URL(request.url);
+			const rewrittenPath =
+				pathSegments.length > 1 ? `/${pathSegments.slice(1).join("/")}` : "/";
+			upstreamUrl.pathname = rewrittenPath;
+			upstreamUrl.search = url.search;
+
 			const worker = env.DISPATCHER.get(workerName);
-			return await worker.fetch(request);
+			const upstreamRequest = new Request(upstreamUrl.toString(), request);
+			return await worker.fetch(upstreamRequest);
 		} catch (e) {
 			if (e.message.startsWith("Worker not found")) {
 				return new Response(`Worker '${workerName}' not found`, {
