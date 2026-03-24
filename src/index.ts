@@ -299,10 +299,16 @@ type DispatchNamespaceBinding = {
 	get(name: string): DispatchTarget;
 };
 
+/** Subset of KVNamespace: custom hostname (lowercase) -> WFP worker script name. */
+type CustomHostMapKv = {
+	get(key: string, type: "text"): Promise<string | null | undefined>;
+};
+
 type Env = {
 	CLOUDFLARE_API_TOKEN: string;
 	CLOUDFLARE_ACCOUNT_ID: string;
 	DISPATCHER: DispatchNamespaceBinding;
+	CUSTOM_HOST_MAP?: CustomHostMapKv;
 	READONLY: string | boolean;
 };
 
@@ -442,7 +448,17 @@ export default {
 			return new Response("Site not found", { status: 404 });
 		}
 
-		let workerName = extractWorkerNameFromSubdomainHost(hostname);
+		let workerName: string | null = null;
+		if (env.CUSTOM_HOST_MAP) {
+			const mapped = await env.CUSTOM_HOST_MAP.get(hostname, "text");
+			if (mapped) {
+				workerName = mapped.trim();
+			}
+		}
+
+		if (!workerName) {
+			workerName = extractWorkerNameFromSubdomainHost(hostname);
+		}
 
 		if (!workerName && isLegacyAdminHost(hostname)) {
 			workerName = rewriteLegacyPath(url);
