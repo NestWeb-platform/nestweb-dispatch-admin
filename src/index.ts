@@ -498,10 +498,31 @@ export default {
 
 		try {
 			const worker = env.DISPATCHER.get(workerName);
-			// Ensure downstream worker sees the effective customer hostname.
+			// IMPORTANT (SaaS custom hostnames):
+			// Do not set the upstream URL hostname to the customer hostname.
+			// If the downstream worker ever does `fetch(request.url)` (or constructs a URL from it),
+			// that would call back into the custom domain and can create a request loop → 522.
+			//
+			// Instead, keep an internal/stable hostname for the request URL, and forward the
+			// customer hostname via headers.
 			const upstreamUrl = new URL(url.toString());
-			upstreamUrl.hostname = hostname;
-			const upstreamRequest = new Request(upstreamUrl.toString(), request);
+			upstreamUrl.hostname = `${workerName}.${ROOT_DOMAIN}`;
+
+			const upstreamHeaders = new Headers(request.headers);
+			upstreamHeaders.set("x-forwarded-host", hostname);
+			upstreamHeaders.set("x-nestweb-customer-host", hostname);
+			if (!upstreamHeaders.get("x-forwarded-proto")) {
+				upstreamHeaders.set("x-forwarded-proto", upstreamUrl.protocol.replace(":", ""));
+			}
+
+			const upstreamRequest = new Request(upstreamUrl.toString(), {
+				method: request.method,
+				headers: upstreamHeaders,
+				body: request.body,
+				// @ts-expect-error Cloudflare Workers supports duplex for streaming requests
+				duplex: "half",
+				redirect: request.redirect,
+			});
 			const response = await worker.fetch(upstreamRequest);
 
 			logDispatchEvent("dispatch.success", {
