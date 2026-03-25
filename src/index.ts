@@ -363,7 +363,11 @@ export default {
 		env: Env,
 	) {
 		const url = new URL(request.url);
-		const hostname = url.hostname.toLowerCase();
+		// In Cloudflare for SaaS fallback origin mode, the connection URL host can be
+		// `sites.nestweb.ai`, while the real customer hostname is carried in `Host`.
+		// We must route by the effective host, not only by `url.hostname`.
+		const hostHeader = (request.headers.get("host") || "").trim().toLowerCase();
+		const hostname = (hostHeader || url.hostname).toLowerCase();
 		const pathSegments = url.pathname.split("/").filter(Boolean);
 		const isReadOnly = isReadOnlyMode(env.READONLY);
 
@@ -451,8 +455,22 @@ export default {
 		let workerName: string | null = null;
 		if (env.CUSTOM_HOST_MAP) {
 			const mapped = await env.CUSTOM_HOST_MAP.get(hostname, "text");
-			if (mapped) {
-				workerName = mapped.trim();
+			const normalized = mapped?.trim();
+			if (normalized) {
+				workerName = normalized;
+			} else if (hostname.startsWith("www.")) {
+				const apex = hostname.slice("www.".length);
+				const mappedApex = await env.CUSTOM_HOST_MAP.get(apex, "text");
+				const normalizedApex = mappedApex?.trim();
+				if (normalizedApex) {
+					workerName = normalizedApex;
+				}
+			} else {
+				const mappedWww = await env.CUSTOM_HOST_MAP.get(`www.${hostname}`, "text");
+				const normalizedWww = mappedWww?.trim();
+				if (normalizedWww) {
+					workerName = normalizedWww;
+				}
 			}
 		}
 
@@ -480,7 +498,10 @@ export default {
 
 		try {
 			const worker = env.DISPATCHER.get(workerName);
-			const upstreamRequest = new Request(url.toString(), request);
+			// Ensure downstream worker sees the effective customer hostname.
+			const upstreamUrl = new URL(url.toString());
+			upstreamUrl.hostname = hostname;
+			const upstreamRequest = new Request(upstreamUrl.toString(), request);
 			const response = await worker.fetch(upstreamRequest);
 
 			logDispatchEvent("dispatch.success", {
