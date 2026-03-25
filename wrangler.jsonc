@@ -11,12 +11,10 @@
 			"remote": true
 		}
 	],
-	// Create remote namespace: npx wrangler kv namespace create nestweb-custom-host-map
-	// Paste the id below (and set CLOUDFLARE_CUSTOM_HOST_KV_NAMESPACE_ID in nestweb-api).
 	"kv_namespaces": [
 		{
 			"binding": "CUSTOM_HOST_MAP",
-			"id": "PASTE_KV_NAMESPACE_ID"
+			"id": "55e7197807a94837ab4a6c085152bdc4"
 		}
 	],
 	"routes": [
