@@ -27,8 +27,12 @@
 			"zone_name": "nestweb.ai"
 		},
 		{
-			"pattern": "*/*",
-			"zone_name": "nestweb.ai"
+			"pattern": "nestwebai.com/*",
+			"zone_name": "nestwebai.com"
+		},
+		{
+			"pattern": "*.nestwebai.com/*",
+			"zone_name": "nestwebai.com"
 		}
 	],
 	"observability": {
