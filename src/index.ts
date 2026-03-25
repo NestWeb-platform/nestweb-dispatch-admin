@@ -4,6 +4,10 @@ const DISPATCH_NAMESPACE = "nestweb-production";
 const ROOT_DOMAIN = "sites.nestweb.ai";
 const LEGACY_ADMIN_HOST = "nestweb-dispatch-admin.nestweb.workers.dev";
 const WORKER_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,56}[a-z0-9])?$/;
+const NESTWEB_ZONE_APEX = "nestweb.ai";
+const NESTWEB_ZONE_WWW = "www.nestweb.ai";
+const NESTWEB_API_HOST = "api.nestweb.ai";
+const NESTWEB_WWW_VERCEL_RESOLVE_OVERRIDE = "9f4ccb62c4c5b3c5.vercel-dns-017.com";
 
 // Deploy function (copied from deploy-wfp.ts)
 async function deploySnippetToNamespace(
@@ -370,6 +374,37 @@ export default {
 		const hostname = (hostHeader || url.hostname).toLowerCase();
 		const pathSegments = url.pathname.split("/").filter(Boolean);
 		const isReadOnly = isReadOnlyMode(env.READONLY);
+
+		// ===== Zone-level bypasses when using * / * routes =====
+		// With a catch-all route ("*/*") on the nestweb.ai zone, every proxied hostname in the zone
+		// will enter this worker. We must bypass/handle platform hosts that are not part of WFP dispatch.
+
+		// 1) API is served via Cloudflare Tunnel (DNS record type: Tunnel). Bypass dispatch.
+		if (hostname === NESTWEB_API_HOST) {
+			return fetch(request);
+		}
+
+		// 2) Apex redirect to www (keeps marketing site canonical).
+		if (hostname === NESTWEB_ZONE_APEX) {
+			const target = new URL(url.toString());
+			target.hostname = NESTWEB_ZONE_WWW;
+			return Response.redirect(target.toString(), 301);
+		}
+
+		// 3) www.nestweb.ai is hosted on Vercel. Proxy it through to Vercel while preserving Host.
+		// Using resolveOverride avoids DNS/route recursion while keeping the browser URL unchanged.
+		if (hostname === NESTWEB_ZONE_WWW) {
+			const init: RequestInit & { cf?: unknown } = {
+				method: request.method,
+				headers: request.headers,
+				body: request.body,
+				// @ts-expect-error Cloudflare Workers supports duplex for streaming requests
+				duplex: "half",
+				redirect: request.redirect,
+				cf: { resolveOverride: NESTWEB_WWW_VERCEL_RESOLVE_OVERRIDE },
+			};
+			return fetch(request.url, init);
+		}
 
 		if (isLegacyAdminHost(hostname) && pathSegments.length === 0) {
 			return new Response(HTML_UI({ isReadOnly }), {
